@@ -1,3 +1,4 @@
+import type { NamespaceId } from '@internal/contract/types';
 import type { AsyncIterableResult } from '@internal/framework-components/runtime';
 import { expectTypeOf, test } from 'vitest';
 import type {
@@ -17,6 +18,7 @@ import type {
   CreateInput,
   EmbedRelationKeys,
   IncludedRow,
+  IncludeResultFields,
   InferFullRow,
   InferRootRow,
   MongoIncludeSpec,
@@ -257,6 +259,59 @@ test('where().select().all() returns AsyncIterableResult<InferRootRow>', () => {
   expectTypeOf(result).toExtend<AsyncIterableResult<InferRootRow<Contract, 'User'>>>();
 });
 
+type AssigneeRelation<Nullable extends boolean> = {
+  readonly to: { readonly namespace: '__unbound__' & NamespaceId; readonly model: 'User' };
+  readonly cardinality: 'N:1';
+  readonly nullable: Nullable;
+  readonly on: {
+    readonly localFields: readonly ['assigneeId'];
+    readonly targetFields: readonly ['_id'];
+  };
+};
+
+type ContractWithAssignee<Nullable extends boolean> = Omit<Contract, 'domain'> & {
+  readonly domain: {
+    readonly namespaces: {
+      readonly __unbound__: {
+        readonly models: {
+          readonly User: Contract['domain']['namespaces']['__unbound__']['models']['User'];
+          readonly Task: Omit<
+            Contract['domain']['namespaces']['__unbound__']['models']['Task'],
+            'relations'
+          > & { readonly relations: { readonly assignee: AssigneeRelation<Nullable> } };
+        };
+        readonly valueObjects: Contract['domain']['namespaces']['__unbound__']['valueObjects'];
+      };
+    };
+  };
+};
+
+type IncludedAssignee<Nullable extends boolean> = IncludeResultFields<
+  ContractWithAssignee<Nullable>,
+  'Task',
+  { assignee: true }
+>['assignee'];
+
+test('an explicit nullable: false relation includes a non-null row', () => {
+  expectTypeOf<IncludedAssignee<false>>().toEqualTypeOf<
+    InferFullRow<ContractWithAssignee<false>, 'User'>
+  >();
+});
+
+test('an explicit nullable: true relation includes row | null', () => {
+  expectTypeOf<IncludedAssignee<true>>().toEqualTypeOf<InferFullRow<
+    ContractWithAssignee<true>,
+    'User'
+  > | null>();
+});
+
+test('a relation whose nullable is widened to boolean includes row | null', () => {
+  expectTypeOf<IncludedAssignee<boolean>>().toEqualTypeOf<InferFullRow<
+    ContractWithAssignee<boolean>,
+    'User'
+  > | null>();
+});
+
 test('include().first() returns row with included relation field', () => {
   const col = {} as MongoCollection<Contract, 'Task'>;
   const result = col.include('assignee').first();
@@ -427,4 +482,13 @@ test('FieldExpression inc/mul restricted to numeric types', () => {
 
   void ({} as NumberExpr).inc(1);
   void ({} as NumberExpr).mul(2);
+});
+
+test('FieldExpression inc/mul on a bigint take a bigint', () => {
+  type BigintExpr = FieldExpression<bigint>;
+
+  expectTypeOf<Parameters<BigintExpr['inc']>>().toEqualTypeOf<[value: bigint]>();
+  expectTypeOf<Parameters<BigintExpr['mul']>>().toEqualTypeOf<[value: bigint]>();
+  // @ts-expect-error a bigint field is not incremented by a number
+  void ({} as BigintExpr).inc(1);
 });

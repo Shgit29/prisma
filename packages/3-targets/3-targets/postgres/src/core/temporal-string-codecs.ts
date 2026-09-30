@@ -6,7 +6,6 @@ import {
   type ColumnHelperFor,
   type ColumnHelperForStrict,
   column,
-  voidParamsSchema,
 } from '@internal/framework-components/codec';
 import { CastExpr, type ProjectionExpr } from '@internal/sql-relational-core/ast';
 import { blindCast } from '@internal/utils/casts';
@@ -19,6 +18,16 @@ import {
   PG_TIMESTAMP_STRING_CODEC_ID,
   PG_TIMESTAMPTZ_STRING_CODEC_ID,
 } from './codec-ids';
+import {
+  pgDate,
+  pgDateCanonical,
+  pgTime,
+  pgTimeCanonical,
+  pgTimestamp,
+  pgTimestampCanonical,
+  pgTimestamptz,
+  pgTimestamptzCanonical,
+} from './data-types';
 import {
   PG_DATE_NATIVE_TYPE,
   PG_TIME_NATIVE_TYPE,
@@ -39,7 +48,7 @@ export class PgDateStringCodec extends CodecImpl<
     return wire;
   }
   encodeJson(value: string): JsonValue {
-    return value;
+    return pgDateCanonical(value);
   }
   decodeJson(json: JsonValue): string {
     return blindCast<string, 'date-string columns serialize to JSON as their wire string form'>(
@@ -55,10 +64,11 @@ export class PgDateStringDescriptor extends PostgresCodecDescriptor<void> {
   protected override jsonProjection(expression: ProjectionExpr): ProjectionExpr {
     return CastExpr.as(expression, 'text');
   }
+  override readonly dataType = pgDate.id;
   override readonly codecId = PG_DATE_STRING_CODEC_ID;
   override readonly traits = ['equality', 'order'] as const;
   override readonly targetTypes = [] as const;
-  override readonly paramsSchema: StandardSchemaV1<void> = voidParamsSchema;
+  override readonly paramsSchema = undefined;
   override factory(): (ctx: CodecInstanceContext) => PgDateStringCodec {
     return () => new PgDateStringCodec(this);
   }
@@ -85,7 +95,7 @@ export class PgTimestampStringCodec extends CodecImpl<
     return wire;
   }
   encodeJson(value: string): JsonValue {
-    return value;
+    return pgTimestampCanonical(value);
   }
   decodeJson(json: JsonValue): string {
     return blindCast<
@@ -102,6 +112,7 @@ export class PgTimestampStringDescriptor extends PostgresCodecDescriptor<Precisi
   protected override jsonProjection(expression: ProjectionExpr): ProjectionExpr {
     return CastExpr.as(expression, 'text');
   }
+  override readonly dataType = pgTimestamp.id;
   override readonly codecId = PG_TIMESTAMP_STRING_CODEC_ID;
   override readonly traits = ['equality', 'order'] as const;
   override readonly targetTypes = [] as const;
@@ -143,7 +154,7 @@ export class PgTimestamptzStringCodec extends CodecImpl<
     return wire;
   }
   encodeJson(value: string): JsonValue {
-    return value;
+    return pgTimestamptzCanonical(value);
   }
   decodeJson(json: JsonValue): string {
     return blindCast<
@@ -160,6 +171,7 @@ export class PgTimestamptzStringDescriptor extends PostgresCodecDescriptor<Preci
   protected override jsonProjection(expression: ProjectionExpr): ProjectionExpr {
     return CastExpr.as(expression, 'text');
   }
+  override readonly dataType = pgTimestamptz.id;
   override readonly codecId = PG_TIMESTAMPTZ_STRING_CODEC_ID;
   override readonly traits = ['equality', 'order'] as const;
   override readonly targetTypes = [] as const;
@@ -201,7 +213,7 @@ export class PgTimeStringCodec extends CodecImpl<
     return wire;
   }
   encodeJson(value: string): JsonValue {
-    return value;
+    return pgTimeCanonical(value);
   }
   decodeJson(json: JsonValue): string {
     return blindCast<string, 'time-string columns serialize to JSON as their wire string form'>(
@@ -217,6 +229,7 @@ export class PgTimeStringDescriptor extends PostgresCodecDescriptor<PrecisionPar
   protected override jsonProjection(expression: ProjectionExpr): ProjectionExpr {
     return CastExpr.as(expression, 'text');
   }
+  override readonly dataType = pgTime.id;
   override readonly codecId = PG_TIME_STRING_CODEC_ID;
   override readonly traits = ['equality', 'order'] as const;
   override readonly targetTypes = [] as const;

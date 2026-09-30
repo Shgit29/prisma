@@ -12,11 +12,13 @@ export type {
   TargetMigrationsCapability,
 } from '@internal/framework-components/control';
 export { assembleAuthoringContributions } from '@internal/framework-components/control';
+export { checkSqlDefaultBody } from '@internal/sql-contract/validators';
 export { extractCodecControlHooks } from '../core/assembly';
 export type { SqlControlFamilyInstance } from '../core/control-instance';
 export type {
   SqlControlTargetDescriptor,
   SqlDescribedContractSpace,
+  SqlPslBuildContext,
 } from '../core/control-target-descriptor';
 export type {
   ContractToSchemaIROptions,
@@ -37,6 +39,8 @@ export {
   partitionCallsByControlPolicy,
   partitionIssuesByControlPolicy,
 } from '../core/migrations/control-policy';
+export type { DataTypeResolver } from '../core/migrations/data-type-resolver';
+export { buildDataTypeResolver } from '../core/migrations/data-type-resolver';
 export type { PlanFieldEventOperationsOptions } from '../core/migrations/field-event-planner';
 export { planFieldEventOperations } from '../core/migrations/field-event-planner';
 export { buildNativeTypeExpander } from '../core/migrations/native-type-expander';
@@ -53,6 +57,11 @@ export type {
   SqlSchemaDiffInput,
   SqlSchemaDiffResult,
 } from '../core/migrations/schema-differ';
+export type { TableNameCaseGuardTable } from '../core/migrations/table-name-case-guard';
+export {
+  detectTableNameCaseChanges,
+  TABLE_NAME_CASE_CHANGED_CODE,
+} from '../core/migrations/table-name-case-guard';
 export type {
   CodecControlHooks,
   CreateSqlMigrationPlanOptions,
@@ -86,11 +95,8 @@ export type {
   StorageTypePlanResult,
 } from '../core/migrations/types';
 export {
-  temporalAuthoringPresets,
-  temporalCodecPreset,
   temporalCodecPresetWithPrecision,
   temporalStringAuthoringPresets,
-  timestampNowControlDescriptor,
 } from '../core/timestamp-now-generator';
 
 export default new SqlFamilyDescriptor();

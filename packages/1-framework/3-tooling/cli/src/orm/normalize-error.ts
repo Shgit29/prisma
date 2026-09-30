@@ -24,6 +24,8 @@ interface RaisedError {
    * and nothing else.
    */
   readonly nextActions?: readonly NextAction[];
+  /** Findings reported alongside the error, already in the protocol's shape. */
+  readonly diagnostics?: readonly Diagnostic[];
 }
 
 /**
@@ -93,6 +95,14 @@ export function toEngineDiagnostic(error: Error & RaisedError): Diagnostic {
 }
 
 /**
+ * An error about the contract, such as a default a planner refuses, which the user fixes in the
+ * contract. A command reports it as it is, not as an unexpected failure of the tool.
+ */
+export function isContractError(error: unknown): error is Error & RaisedError {
+  return isRaisedError(error) && error.code.startsWith('CONTRACT.');
+}
+
+/**
  * The handler boundary's single conversion. Handlers pass every error they
  * return through `notOk` — and every error a top-of-handler catch sees —
  * through this, so a settled envelope always carries `nextActions` and never
@@ -110,6 +120,7 @@ export function normalizeError(error: unknown): CliStructuredError {
   return new CliStructuredError(diagnostic.code, diagnostic.summary, {
     severity: diagnostic.severity,
     nextActions: diagnostic.nextActions,
+    ...ifDefined('diagnostics', error.diagnostics),
     ...ifDefined('why', diagnostic.why),
     ...ifDefined('where', diagnostic.where),
     ...ifDefined('meta', diagnostic.meta),

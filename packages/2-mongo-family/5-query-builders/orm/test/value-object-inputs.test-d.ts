@@ -115,7 +115,16 @@ test('DefaultModelRow handles scalar array fields', () => {
 
 test('CreateInput accepts inline value object structure', () => {
   type Input = CreateInput<VOContract, 'User'>;
-  expectTypeOf<Input['contactInfo']>().toEqualTypeOf<ContactInfoShape | null>();
+  expectTypeOf<Input['contactInfo']>().toEqualTypeOf<ContactInfoShape | null | undefined>();
+});
+
+test('CreateInput lets a nullable field be left out', () => {
+  type Input = CreateInput<VOContract, 'User'>;
+  const input: Input = { name: 'Alice', tags: [] };
+  expectTypeOf(input).toExtend<Input>();
+  // @ts-expect-error a non-nullable field stays required
+  const missingName: Input = { tags: [] };
+  void missingName;
 });
 
 test('CreateInput accepts null for nullable value object field', () => {
@@ -267,7 +276,7 @@ test('DefaultModelRow resolves via InferModelRow from the precomputed field outp
 test('CreateInput resolves via FieldInputTypes when present', () => {
   type Input = CreateInput<VOContractWithFieldTypes, 'User'>;
   expectTypeOf<Input['name']>().toEqualTypeOf<string>();
-  expectTypeOf<Input['contactInfo']>().toEqualTypeOf<ContactInfoShape | null>();
+  expectTypeOf<Input['contactInfo']>().toEqualTypeOf<ContactInfoShape | null | undefined>();
 });
 
 // --- Contracts with embedded relations, references, and variants + FieldOutputTypes ---
@@ -348,6 +357,7 @@ type ExtContract = MongoContractWithTypeMaps<
                 readonly assignee: {
                   readonly to: CrossRefFor<'User'>;
                   readonly cardinality: 'N:1';
+                  readonly nullable: false;
                   readonly on: {
                     readonly localFields: readonly ['assigneeId'];
                     readonly targetFields: readonly ['_id'];
@@ -452,7 +462,7 @@ test('InferFullRow resolves to primitives with embedded relations when FieldOutp
 test('IncludedRow resolves included reference relations when FieldOutputTypes is present', () => {
   type TaskIncluded = IncludedRow<ExtContract, 'Task', { assignee: true }>;
   expectTypeOf<TaskIncluded['_id']>().toEqualTypeOf<string>();
-  expectTypeOf<TaskIncluded['assignee']>().toEqualTypeOf<{ _id: string; name: string } | null>();
+  expectTypeOf<TaskIncluded['assignee']>().toEqualTypeOf<{ _id: string; name: string }>();
 });
 
 test('VariantCreateInput resolves when FieldInputTypes is present', () => {

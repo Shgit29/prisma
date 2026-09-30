@@ -16,7 +16,7 @@ import { errorConfigFileNotFound } from '@internal/errors/control';
 import { Migration } from '@internal/migration-tools/migration';
 import { notOk, ok } from '@internal/utils/result';
 import { join } from 'pathe';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const loadConfigMock = vi.fn();
 const createControlStackMock = vi.fn();
@@ -34,6 +34,10 @@ vi.mock('@internal/framework-components/control', async () => {
 
 vi.resetModules();
 const { MigrationCLI } = await import('../src/migration-cli');
+
+afterAll(() => {
+  vi.resetModules();
+});
 
 /**
  * `node:stream.Writable` subclass that captures every chunk written to
@@ -218,7 +222,7 @@ describe('MigrationCLI.run', () => {
     });
 
     expect(exitCode).toBe(1);
-    expect(stderr.text).toMatch(/config|prisma-next/i);
+    expect(stderr.text).toMatch(/config|prisma/i);
   });
 
   it('no-ops silently when the file is being imported (not the entrypoint)', async () => {

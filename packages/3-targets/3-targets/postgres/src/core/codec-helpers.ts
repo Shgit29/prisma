@@ -9,6 +9,8 @@
  */
 
 import type { JsonValue } from '@internal/contract/types';
+import { isNonFiniteText, numeralText } from '@internal/sql-relational-core/ast';
+import { structuredError } from '@internal/utils/structured-error';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { type as arktype } from 'arktype';
 import { postgresError } from './errors';
@@ -59,8 +61,12 @@ export function renderPrecision(
   return `${typeName}<${precision}>`;
 }
 
+/**
+ * A `numeric` value as its canonical decimal text. A number is written out without an exponent,
+ * because `numeric` text has no exponent syntax and `encodeJson` refuses one.
+ */
 export const pgNumericDecode = (wire: string | number): string => {
-  if (typeof wire === 'number') return String(wire);
+  if (typeof wire === 'number') return numeralText(wire);
   return wire;
 };
 
@@ -148,6 +154,26 @@ export const pgInt8Decode = (wire: string | number | bigint): bigint =>
 export const pgUnboundedIntDecode = (wire: string | number | bigint): bigint =>
   decimalIntegerDecode('pg/unboundedint@1', wire);
 
+/**
+ * Neither JSON nor a SQL number literal has a form for `NaN` or the infinities; PostgreSQL reads
+ * and writes them as the text `NaN`, `Infinity`, `-Infinity`, so the float codecs carry them as
+ * that text on the wire and in JSON.
+ */
+export const pgFloatEncode = (value: number): string | number =>
+  Number.isFinite(value) ? value : String(value);
+
+export const pgFloatEncodeJson = (value: number): JsonValue => pgFloatEncode(value);
+
+export const pgFloatDecodeJson = (codecId: string, json: JsonValue): number => {
+  if (typeof json === 'number') return json;
+  if (typeof json === 'string' && isNonFiniteText(json)) return Number(json);
+  throw postgresError(
+    'RUNTIME.DECODE_FAILED',
+    `${codecId} database JSON value must be a number or the text NaN, Infinity or -Infinity`,
+    { meta: { codecId, received: typeof json } },
+  );
+};
+
 const MIN_SAFE_INTEGER_BIGINT = BigInt(Number.MIN_SAFE_INTEGER);
 const MAX_SAFE_INTEGER_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
@@ -170,12 +196,12 @@ const pgInt8NumberGuard = (
   return value;
 };
 
-export const pgInt8NumberEncodeJson = (value: number): number => {
+export const pgInt8NumberEncode = (value: number): string => {
   requireJsType('pg/int8number@1', 'number', value);
-  return pgInt8NumberGuard('RUNTIME.ENCODE_FAILED', value);
+  return String(pgInt8NumberGuard('RUNTIME.ENCODE_FAILED', value));
 };
 
-export const pgInt8NumberEncode = (value: number): string => String(pgInt8NumberEncodeJson(value));
+export const pgInt8NumberEncodeJson = (value: number): string => pgInt8NumberEncode(value);
 
 /**
  * Reads an `int8` wire value as a `number`, throwing outside ±(2^53 − 1) and on
@@ -196,14 +222,14 @@ export const pgInt8NumberDecode = (wire: string | number | bigint): number => {
 };
 
 export const pgInt8NumberDecodeJson = (json: JsonValue): number => {
-  if (typeof json !== 'number') {
+  if (typeof json !== 'string') {
     throw postgresError(
       'RUNTIME.DECODE_FAILED',
-      'pg/int8number@1 database JSON value must be a number',
+      'pg/int8number@1 database JSON value must be decimal text',
       { meta: { codecId: 'pg/int8number@1', received: typeof json } },
     );
   }
-  return pgInt8NumberGuard('RUNTIME.DECODE_FAILED', json);
+  return pgInt8NumberDecode(json);
 };
 
 /**
@@ -214,6 +240,10 @@ export const pgInt8NumberDecodeJson = (json: JsonValue): number => {
  */
 export const decimalTextBigintLiteral = (value: JsonValue): string | undefined =>
   typeof value === 'string' && DECIMAL_INTEGER.test(value) ? `${value}n` : undefined;
+
+/** Renders the decimal text of `pg/int8number@1`, whose application type is `number`, as a number literal. */
+export const decimalTextNumberLiteral = (value: JsonValue): string | undefined =>
+  typeof value === 'string' && DECIMAL_INTEGER.test(value) ? value : undefined;
 
 export const pgNumericRenderOutputType = (typeParams: {
   readonly precision?: number;
@@ -363,9 +393,56 @@ const formatIsoDuration = ({ months, days, micros }: PgInterval): string => {
   return rendered === 'P' ? 'PT0S' : rendered;
 };
 
-/** Normalises any accepted ISO-8601 duration to the canonical spelling. */
-export const pgIntervalCanonical = (text: string): string =>
-  formatIsoDuration(intervalFieldsOf(text));
+/**
+ * An interval as PostgreSQL prints it under `IntervalStyle = 'postgres'`: `1 year 2 mons 3 days
+ * 04:05:06.5`, `-1 years -2 mons +3 days -04:00:00`, `00:00:00`.
+ */
+const POSTGRES_INTERVAL =
+  /^(?:([+-]?\d+) years? ?)?(?:([+-]?\d+) mons? ?)?(?:([+-]?\d+) days? ?)?(?:([+-])?(\d+):(\d{2}):(\d{2})(?:\.(\d+))?)?$/;
+
+function postgresIntervalFields(text: string): PgInterval | undefined {
+  const match = POSTGRES_INTERVAL.exec(text);
+  if (match === null || text === '' || text.endsWith(' ')) return undefined;
+  const [, years = '0', months = '0', days = '0', sign, hours = '0', minutes = '0', seconds = '0'] =
+    match;
+  const fraction = match[8] ?? '';
+  const magnitude =
+    (BigInt(hours) * 3_600n + BigInt(minutes) * 60n + BigInt(seconds)) * MICROS_PER_SECOND +
+    BigInt(fraction.padEnd(6, '0') || '0');
+  return {
+    months: Number(years) * 12 + Number(months),
+    days: Number(days),
+    micros: sign === '-' ? -magnitude : magnitude,
+  };
+}
+
+function intervalRefused(message: string): never {
+  throw structuredError('CONTRACT.CAST_REFUSED', message, {
+    why: 'pg/interval stores one canonical form for each interval (ADR 254), and reads ISO 8601 durations and the text PostgreSQL prints.',
+    fix: 'Write an ISO 8601 duration, as the message shows.',
+  });
+}
+
+/**
+ * The canonical form of `pg/interval` (ADR 254), from an ISO 8601 duration or the text PostgreSQL
+ * prints under `IntervalStyle = 'postgres'`.
+ */
+export function pgIntervalCanonical(text: string): string {
+  const fractionDigits = /\.(\d+)/.exec(text)?.[1]?.length ?? 0;
+  if (fractionDigits > 6) {
+    intervalRefused(
+      `"${text}" has ${fractionDigits} digits after the decimal point, but pg/interval holds microseconds, so at most 6. Round it, as in "PT1.123456S".`,
+    );
+  }
+  if (ISO_DURATION.test(text)) return formatIsoDuration(intervalFieldsOf(text));
+  const fields = postgresIntervalFields(text);
+  if (fields === undefined) {
+    intervalRefused(
+      `pg/interval cannot read "${text}". Write an ISO 8601 duration, as in "P1Y2M3DT4H5M6S".`,
+    );
+  }
+  return formatIsoDuration(fields);
+}
 
 /** Parses an ISO-8601 duration into the application value. */
 export const pgIntervalFromIso = (text: string): PgInterval => intervalFieldsOf(text);
@@ -425,10 +502,33 @@ export const pgByteaDecodeJson = (value: JsonValue): Uint8Array => {
   return new Uint8Array(Buffer.from(value, 'base64'));
 };
 
+const BYTEA_TEXT = /^\\x(?:[0-9A-Fa-f]{2})*$/;
+
+/**
+ * Scalar pg bytea values arrive as Uint8Array/Buffer; target-parsed bytea list elements arrive as PostgreSQL hex text.
+ */
+export const pgByteaDecodeWire = (wire: Uint8Array | string): Uint8Array => {
+  if (wire instanceof Uint8Array) {
+    return wire.constructor === Uint8Array
+      ? wire
+      : new Uint8Array(wire.buffer, wire.byteOffset, wire.byteLength);
+  }
+  if (!BYTEA_TEXT.test(wire)) {
+    throw postgresError(
+      'RUNTIME.DECODE_FAILED',
+      'pg/bytea@1 wire value must be a bytea hex string or Uint8Array',
+      { meta: { codecId: 'pg/bytea@1', received: wire } },
+    );
+  }
+  return new Uint8Array(Buffer.from(wire.slice(2), 'hex'));
+};
+
+const parseJsonWire: (text: string) => JsonValue = JSON.parse;
+
 export const pgJsonEncode = (value: string | JsonValue): string => JSON.stringify(value);
 export const pgJsonDecode = (wire: string | JsonValue): JsonValue =>
-  typeof wire === 'string' ? JSON.parse(wire) : wire;
+  typeof wire === 'string' ? parseJsonWire(wire) : wire;
 
 export const pgJsonbEncode = (value: string | JsonValue): string => JSON.stringify(value);
 export const pgJsonbDecode = (wire: string | JsonValue): JsonValue =>
-  typeof wire === 'string' ? JSON.parse(wire) : wire;
+  typeof wire === 'string' ? parseJsonWire(wire) : wire;

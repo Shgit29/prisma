@@ -76,6 +76,24 @@ describe('buildColumnDefaultSql', () => {
     expect(buildColumnDefaultSql({ kind: 'literal', value: null })).toBe('DEFAULT NULL');
   });
 
+  it('writes a datetime default as the text its codec writes for every row', () => {
+    expect([
+      buildColumnDefaultSql(
+        { kind: 'literal', value: '2024-01-01T00:00:00Z' },
+        'sqlite/datetime@1',
+      ),
+      buildColumnDefaultSql(
+        { kind: 'literal', value: '-000043-03-15T00:00:00.5Z' },
+        'sqlite/datetime@1',
+      ),
+      buildColumnDefaultSql({ kind: 'literal', value: '2024-01-01T00:00:00Z' }, 'sqlite/text@1'),
+    ]).toEqual([
+      "DEFAULT '2024-01-01T00:00:00.000Z'",
+      "DEFAULT '-000043-03-15T00:00:00.500Z'",
+      "DEFAULT '2024-01-01T00:00:00Z'",
+    ]);
+  });
+
   it("renders now() as datetime('now')", () => {
     expect(buildColumnDefaultSql({ kind: 'function', expression: 'now()' })).toBe(
       "DEFAULT (datetime('now'))",
@@ -89,6 +107,18 @@ describe('buildColumnDefaultSql', () => {
   it('renders custom function default', () => {
     expect(buildColumnDefaultSql({ kind: 'function', expression: 'random()' })).toBe(
       'DEFAULT (random())',
+    );
+  });
+
+  it('renders a tagged-literal body verbatim inside DEFAULT (...)', () => {
+    expect(buildColumnDefaultSql({ kind: 'function', expression: 'CURRENT_TIMESTAMP' })).toBe(
+      'DEFAULT (CURRENT_TIMESTAMP)',
+    );
+  });
+
+  it('rejects a dollar-quoted body with CONTRACT.DEFAULT_INVALID, the same rule as Postgres', () => {
+    expect(() => buildColumnDefaultSql({ kind: 'function', expression: '$$x$$' })).toThrow(
+      expect.objectContaining({ code: 'CONTRACT.DEFAULT_INVALID' }),
     );
   });
 

@@ -29,8 +29,8 @@ import {
   MongoSchemaValidator,
 } from '@internal/mongo-schema-ir';
 import { describe, expect, it } from 'vitest';
-import { MongoMigrationPlanner } from '../src/core/mongo-planner';
-import { CollModCall, CreateIndexCall } from '../src/core/op-factory-call';
+import { MongoMigrationPlanner } from '../src/core/migrations/mongo-planner';
+import { CollModCall, CreateIndexCall } from '../src/core/migrations/op-factory-call';
 import type { PlannerProducedMongoMigration } from '../src/exports/control';
 
 const ALL_CLASSES_POLICY: MigrationOperationPolicy = {
@@ -680,6 +680,101 @@ describe('MongoMigrationPlanner', () => {
       expect(collModOps[0]!.operationClass).toBe('widening');
     });
 
+    describe('a property whose schema admits more', () => {
+      const JSON_TYPES = ['object', 'array', 'string', 'double', 'int', 'long', 'bool', 'null'];
+
+      function validatorUpdate(originMeta: unknown, destMeta: unknown) {
+        const jsonSchema = (meta: unknown) => ({
+          bsonType: 'object',
+          required: ['_id'],
+          properties: { _id: { bsonType: 'objectId' }, name: { bsonType: 'string' }, meta },
+          additionalProperties: false,
+        });
+        const contract = makeContract({
+          items: {
+            validator: {
+              jsonSchema: jsonSchema(destMeta),
+              validationLevel: 'strict',
+              validationAction: 'error',
+            },
+          },
+        });
+        const origin = new MongoSchemaIR([
+          new MongoSchemaCollection({
+            name: 'items',
+            validator: new MongoSchemaValidator({
+              jsonSchema: jsonSchema(originMeta),
+              validationLevel: 'strict',
+              validationAction: 'error',
+            }),
+          }),
+        ]);
+        const [operation] = planSuccess(planner, contract, origin).operations;
+        return operation;
+      }
+
+      it('is widening when the schema becomes {}, as changing Json to Bson does', () => {
+        expect(validatorUpdate({ bsonType: JSON_TYPES }, {})).toMatchObject({
+          operationClass: 'widening',
+          label: 'Update validator on items (changed: meta)',
+        });
+      });
+
+      it('is widening when the bsonType list gains a type, as making a field optional does', () => {
+        expect(validatorUpdate({ bsonType: 'int' }, { bsonType: ['null', 'int'] })).toMatchObject({
+          operationClass: 'widening',
+        });
+      });
+
+      it('is widening when the items of an array schema admit more', () => {
+        expect(
+          validatorUpdate(
+            { bsonType: 'array', items: { bsonType: JSON_TYPES } },
+            { bsonType: 'array', items: {} },
+          ),
+        ).toMatchObject({ operationClass: 'widening' });
+      });
+
+      it('is destructive when the bsonType list loses a type, as changing Bson to Json does', () => {
+        expect(validatorUpdate({}, { bsonType: JSON_TYPES })).toMatchObject({
+          operationClass: 'destructive',
+          label: 'Update validator on items (changed: meta)',
+        });
+      });
+
+      it('names added and removed properties in the label', () => {
+        const contract = makeContract({
+          items: {
+            validator: {
+              jsonSchema: {
+                bsonType: 'object',
+                properties: { name: { bsonType: 'string' }, note: { bsonType: 'string' } },
+              },
+              validationLevel: 'strict',
+              validationAction: 'error',
+            },
+          },
+        });
+        const origin = new MongoSchemaIR([
+          new MongoSchemaCollection({
+            name: 'items',
+            validator: new MongoSchemaValidator({
+              jsonSchema: {
+                bsonType: 'object',
+                properties: { name: { bsonType: 'int' }, legacy: { bsonType: 'string' } },
+              },
+              validationLevel: 'strict',
+              validationAction: 'error',
+            }),
+          }),
+        ]);
+        const [operation] = planSuccess(planner, contract, origin).operations;
+        expect(operation?.label).toBe(
+          'Update validator on items (changed: name; added: note; removed: legacy)',
+        );
+      });
+    });
+
     it('classifies adding a non-required property as widening', () => {
       const contract = makeContract({
         users: {
@@ -1085,7 +1180,7 @@ describe('MongoMigrationPlanner', () => {
 
     // TML-2486: bare collections (no validator/options/indexes) must still
     // round-trip through `db init`. MongoDB creates collections implicitly
-    // on first insert, but Prisma Next's schema verifier treats a contract-
+    // on first insert, but Prisma 8's schema verifier treats a contract-
     // declared collection that is absent from the live database as a
     // `missing_table` issue. The planner therefore has to emit an explicit
     // createCollection op so the runner provisions the collection before
@@ -1567,7 +1662,7 @@ describe('MongoMigrationPlanner', () => {
     });
   });
 
-  describe('polymorphic collections (FL-09)', () => {
+  describe('polymorphic collections', () => {
     it('does not createCollection for variant names when contract has only the base collection', () => {
       const contract = makeContract({
         tasks: {

@@ -201,10 +201,10 @@ export const postgresConformanceCases: readonly PostgresCodecConformanceCase[] =
     value: Uint8Array.from({ length: 200 }, (_, index) => (index * 7) % 256),
   },
   // The Temporal-backed codecs' application value is a `Temporal.*`, so a case is written as the
-  // value itself rather than as text. `encodeJson` renders it through `toString()` and the
-  // projection renders whatever PostgreSQL emits for the column: the same moment in time, but not
-  // necessarily the same characters. A case agrees here only where those two spellings happen to
-  // coincide, which is a fact about spelling rather than about the value surviving the round trip.
+  // value itself rather than as text. `encodeJson` writes the data type's canonical form and the
+  // projection renders whatever PostgreSQL emits for the column; the harness compares the two in
+  // canonical form. A `Temporal` value is not deep-equal to its copy, so these cases give the
+  // round trip its own equality.
   {
     codecId: 'pg/date-temporal@1',
     label: 'calendar date',
@@ -215,8 +215,6 @@ export const postgresConformanceCases: readonly PostgresCodecConformanceCase[] =
     label: 'microsecond precision',
     value: Temporal.PlainDateTime.from('2026-01-02T03:04:05.123456'),
     typeParams: { precision: 6 },
-    // The projection emits `2026-01-02 03:04:05.123456`; toString() spells the same wall-clock
-    // reading with a T. Both are correct, so the round trip is what there is to check.
     valueEquality: plainDateTimesEqual,
   },
   {
@@ -224,10 +222,6 @@ export const postgresConformanceCases: readonly PostgresCodecConformanceCase[] =
     label: 'microsecond precision at UTC',
     value: Temporal.Instant.from('2026-01-02T03:04:05.123456Z'),
     typeParams: { precision: 6 },
-    // The projection emits `2026-01-02 03:04:05.123456+00`; toString() spells the same instant with
-    // a T and a trailing Z. The disagreement is permanent and correct, which is why this is a
-    // round-trip case rather than a marked one — a marker would assert forever that a working
-    // system is broken.
     valueEquality: instantsEqual,
   },
   {
@@ -235,6 +229,14 @@ export const postgresConformanceCases: readonly PostgresCodecConformanceCase[] =
     label: 'microsecond precision',
     value: Temporal.PlainTime.from('03:04:05.123456'),
     typeParams: { precision: 6 },
+  },
+  {
+    codecId: 'pg/timestamptz-date@1',
+    label: 'millisecond precision at UTC',
+    value: new Date('2026-01-02T03:04:05.123Z'),
+    typeParams: { precision: 3 },
+    valueEquality: (left, right) =>
+      left instanceof Date && right instanceof Date && left.getTime() === right.getTime(),
   },
   // The `*-string` codecs' application value is PostgreSQL's own rendering, so each case is written
   // the way the server writes it — space separator, two-digit offset, microseconds. That is now
@@ -318,6 +320,7 @@ export const postgresConformanceCases: readonly PostgresCodecConformanceCase[] =
     value: '123e4567-e89b-12d3-a456-426614174000',
   },
   { codecId: 'pg/inet@1', label: 'ipv4 address', value: '192.168.0.1' },
+  { codecId: 'pg/tsquery@1', label: 'tsquery in its canonical form', value: "'zebra' & !'graze'" },
   { codecId: 'pg/text-array@1', label: 'string array', value: ['a', 'b'] },
   {
     codecId: 'pg/text-array@1',
@@ -408,6 +411,12 @@ export const postgresConformanceCases: readonly PostgresCodecConformanceCase[] =
   },
   {
     codecId: 'pg/inet@1',
+    label: 'null',
+    value: undefined,
+    nullValue: true,
+  },
+  {
+    codecId: 'pg/tsquery@1',
     label: 'null',
     value: undefined,
     nullValue: true,
@@ -516,6 +525,13 @@ export const postgresConformanceCases: readonly PostgresCodecConformanceCase[] =
     label: 'null',
     value: undefined,
     typeParams: { precision: 6 },
+    nullValue: true,
+  },
+  {
+    codecId: 'pg/timestamptz-date@1',
+    label: 'null',
+    value: undefined,
+    typeParams: { precision: 3 },
     nullValue: true,
   },
   {

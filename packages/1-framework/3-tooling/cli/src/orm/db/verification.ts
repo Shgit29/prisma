@@ -22,12 +22,17 @@ import {
   errorUnexpected,
 } from '../../utils/cli-errors';
 import { sanitizeErrorMessage } from '../../utils/command-helpers';
+import { chooseAction, runCommandAction } from '../../utils/next-actions';
 import { contractPathFor, displayPath } from '../migration/paths';
 import { normalizeError } from '../normalize-error';
 
-/** The contract both verification commands read, and where it was read from. */
+/**
+ * The contract both verification commands read, and where it was read from.
+ * `json` is the parsed file as read, for commands that also store it.
+ */
 export interface EmittedContract {
   readonly contract: Contract;
+  readonly json: Record<string, unknown>;
   readonly path: string;
   readonly displayPath: string;
 }
@@ -42,7 +47,7 @@ export async function readEmittedContract(inputs: {
   readonly cwd: string;
   readonly commandName: string;
 }): Promise<Result<EmittedContract, CliStructuredError>> {
-  const path = contractPathFor(inputs.config, inputs.cwd);
+  const path = contractPathFor(inputs.config);
   if (path === undefined) {
     return notOk(
       normalizeError(
@@ -76,8 +81,10 @@ export async function readEmittedContract(inputs: {
 
   const familyInstance = inputs.config.family.create(createControlStack(inputs.config));
   try {
+    const json = castAs<Record<string, unknown>>(JSON.parse(content));
     return ok({
-      contract: familyInstance.deserializeContract(castAs<unknown>(JSON.parse(content))),
+      contract: familyInstance.deserializeContract(json),
+      json,
       path,
       displayPath: relativePath,
     });
@@ -214,7 +221,8 @@ const OUTCOME_LABEL: Record<ExpectationFailureReason, string> = {
 
 /** What a diff issue says, in the words the commander shell used. */
 export function issueLabel(issue: SchemaDiffIssue): string {
-  return `${OUTCOME_LABEL[issueOutcome(issue)]}: ${issue.path.join('/')}`;
+  const label = `${OUTCOME_LABEL[issueOutcome(issue)]}: ${issue.path.join('/')}`;
+  return issue.explanation === undefined ? label : `${label}. ${issue.explanation}`;
 }
 
 function issueNodes(issues: readonly SchemaDiffIssue[], status: 'error' | 'warn'): TreeNode[] {
@@ -273,7 +281,9 @@ export function schemaVerdictDiagnostic(inputs: {
     code: dotted ? code : 'CONTRACT.VERIFY_FAILED',
     severity: 'error',
     summary: inputs.result.summary,
-    ...(issues.length === 0 ? {} : { why: `The live schema differs: ${issues.join('; ')}.` }),
+    ...(issues.length === 0
+      ? {}
+      : { why: sentence(`The live schema differs: ${issues.join('; ')}`) }),
     nextActions: inputs.nextActions,
     meta: {
       ...(inputs.space === undefined ? {} : { space: inputs.space }),
@@ -281,4 +291,43 @@ export function schemaVerdictDiagnostic(inputs: {
       ...(dotted || code === undefined ? {} : { code }),
     },
   };
+}
+
+function sentence(text: string): string {
+  return text.endsWith('.') ? text : `${text}.`;
+}
+
+/**
+ * What to do about schema drift. An issue with an explanation means the emitted contract holds a
+ * value its type refuses. Only re-emitting fixes that, and the re-emitted contract has a new hash,
+ * so that is the one action offered.
+ */
+export function schemaDriftNextActions(inputs: {
+  readonly verb: 'sign' | 'verify';
+  readonly contractRef: string | undefined;
+  readonly issues: readonly SchemaDiffIssue[];
+}): readonly NextAction[] {
+  const { verb, contractRef } = inputs;
+  const retryAfterEmit =
+    contractRef === undefined
+      ? `${verb} again`
+      : `${verb} the emitted contract instead of "${contractRef}"`;
+  const drift = [
+    runCommandAction(
+      `Change the database to match the contract, then ${verb} again`,
+      contractRef === undefined ? '{bin} db update' : `{bin} db update --to "${contractRef}"`,
+    ),
+    chooseAction(
+      `Or change the contract source to describe the database as it is, re-run contract emit, then ${retryAfterEmit}`,
+    ),
+  ];
+  const contractRefused = inputs.issues.some((issue) => issue.explanation !== undefined);
+  return contractRefused
+    ? [
+        runCommandAction(
+          'Re-emit the contract, which stores the refused default as its type holds it',
+          '{bin} contract emit',
+        ),
+      ]
+    : drift;
 }

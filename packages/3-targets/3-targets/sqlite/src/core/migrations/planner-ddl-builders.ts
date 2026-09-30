@@ -8,11 +8,14 @@
  * see `StorageColumn` or `storageTypes`.
  */
 
+import { checkSqlDefaultBody } from '@internal/family-sql/control';
 import type {
   StorageColumn,
   StorageTable,
   StorageTypeInstance,
 } from '@internal/sql-contract/types';
+import { SQLITE_DATETIME_CODEC_ID } from '../codec-ids';
+import { decodeSqliteDatetime, encodeSqliteDatetime } from '../codecs';
 import { sqliteError } from '../errors';
 import { escapeLiteral, quoteIdentifier } from '../sql-utils';
 
@@ -32,11 +35,11 @@ function assertSafeNativeType(nativeType: string): void {
 }
 
 function assertSafeDefaultExpression(expression: string): void {
-  if (expression.includes(';') || /--|\/\*|\bSELECT\b/i.test(expression)) {
+  if (checkSqlDefaultBody(expression) !== undefined) {
     throw sqliteError(
       'CONTRACT.DEFAULT_INVALID',
       `Unsafe default expression in contract: "${expression}". ` +
-        'Default expressions must not contain semicolons, SQL comment tokens, or subqueries.',
+        'Default expressions must not contain semicolons, SQL comment tokens, dollar-quoting, or subqueries.',
       { meta: { expression } },
     );
   }
@@ -62,12 +65,15 @@ export function buildColumnTypeSql(
  * SQLite encodes that as `INTEGER PRIMARY KEY AUTOINCREMENT` inline on the
  * column definition, not as a separate DEFAULT.
  */
-export function buildColumnDefaultSql(columnDefault: SqliteColumnDefault | undefined): string {
+export function buildColumnDefaultSql(
+  columnDefault: SqliteColumnDefault | undefined,
+  codecId?: string,
+): string {
   if (!columnDefault) return '';
 
   switch (columnDefault.kind) {
     case 'literal':
-      return `DEFAULT ${renderDefaultLiteral(columnDefault.value)}`;
+      return `DEFAULT ${renderDefaultLiteral(columnDefault.value, codecId)}`;
     case 'function': {
       if (columnDefault.expression === 'autoincrement()') return '';
       if (columnDefault.expression === 'now()') return "DEFAULT (datetime('now'))";
@@ -77,9 +83,16 @@ export function buildColumnDefaultSql(columnDefault: SqliteColumnDefault | undef
   }
 }
 
-export function renderDefaultLiteral(value: unknown): string {
+/**
+ * A datetime default is the stored value itself in SQLite, which compares text byte by byte, so it
+ * is written as the text the column's codec writes for every row, not as its canonical form.
+ */
+export function renderDefaultLiteral(value: unknown, codecId?: string): string {
   if (value instanceof Date) {
-    return `'${escapeLiteral(value.toISOString())}'`;
+    return `'${escapeLiteral(encodeSqliteDatetime(value))}'`;
+  }
+  if (typeof value === 'string' && codecId === SQLITE_DATETIME_CODEC_ID) {
+    return `'${escapeLiteral(encodeSqliteDatetime(decodeSqliteDatetime(value)))}'`;
   }
   if (typeof value === 'string') {
     return `'${escapeLiteral(value)}'`;
